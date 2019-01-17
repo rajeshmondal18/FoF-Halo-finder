@@ -19,4 +19,4 @@ make fof_main
 It will create the executable 'fof_main'
 _____________________________________
 
-Please acknowledge these papers Mondal et al. 2015 (http://adsabs.harvard.edu/abs/2015MNRAS.449L..41M), if you are using the code.
+Please acknowledge Mondal et al. 2015 (http://adsabs.harvard.edu/abs/2015MNRAS.449L..41M), if you are using the code.
