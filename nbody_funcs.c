@@ -1,19 +1,18 @@
 #include<stdio.h>
+#include<math.h>
 #include<stdlib.h>
 #include<string.h>
-#include<math.h>
 #include<fftw3.h>
+#include"nbody.h"
 #include<omp.h>
+/*---------------------GLOBAL VARIABLES declaration---------------------*/
+// Cosmological parameters read from input file  "input.zel"
 
-#include "nbody.h"
-//*******************************************************************************
-//                    global  variables from Nbody_comp 
-//*******************************************************************************
-
-extern float  vhh, // Hubble parameter in units of 100 km/s/Mpc
+extern float  vhh, // Hubble parameter 
   vomegam, // Omega_matter; total matter density (baryons+CDM) parameter
   vomegalam, // Cosmological Constant 
   vomegab, //Omega_baryon
+  tcmb, //  CMB temperature
   sigma_8_present ,//  Last updated value of sigma_8 (Presently WMAP)
   vnn; // Spectral index of primordial Power spectrum
 
@@ -21,34 +20,33 @@ extern long N1,N2,N3;// box dimension (grid)
 extern int NF, // Fill every NF grid point 
   Nbin; // Number of bins to calculate final P(k) (output)
 
+extern long    MM; // Number of particles 
 extern float   LL; // grid spacing in Mpc
 
-extern long    MM; // Number of particles
 // global variables  (calculated )
 
 extern int zel_flag, // memory allocation for zel is 3 times that for nbody
-  fourier_flag;//for fourier transfrom
-extern float  DM_m, // Darm matter mass of simulation particle (calculated) 
+  fourier_flag; //for fourier transfrom
+
+extern float   DM_m, // Darm matter mass of simulation particle (calculated) 
   norm, // normalize Pk
   pi;
 
-extern io_header    header1;
 
-// arrays for storing data
-extern float ***ro; // for density/potential
+extern   io_header  header1; // structure for header 
+extern float ***ro;  // for density or potential
 extern fftwf_plan p_ro; // for FFT
 extern fftwf_plan q_ro; // for FFT
 
-//*******************************************************************************
-//                    done global variables from Nbody_comp 
-//*******************************************************************************
 
 // arrays for storing data
 static float ***va; // for grad phi
 static float  norml, CC; // normalization constants
 static float rho_b_inv, // (Mean number of particles/grid cell)^{-1}
   Cx,Cy,Cz, // conversion from i,j,k to kx,ky,kz
-  Lcube,vol; // L^3, Volume=L^3*N1*N2*N3
+  Lcube,vol,  // L^3, Volume=L^3*N1*N2*N3
+  tpibyL;// 2 pi /LL
+ 
 static fftwf_plan q_va; // for FFT
 static omp_lock_t *ro_lck;
 
@@ -68,8 +66,7 @@ void Setting_Up_Memory_For_Ro(float av)
   // done multi thread 
   
   ro = allocate_fftwf_3d(N1,N2,N3+2);
-  if(zel_flag==1)
-    va = allocate_fftwf_3d(N1,N2,N3+2); /* The last dimension gets padded because of using REAL FFT */
+  va = allocate_fftwf_3d(N1,N2,N3+2); /* The last dimension gets padded because of using REAL FFT */
   
   ro_lck=(omp_lock_t*)&(va[0][0][0]); 
   /****************************************************/	
@@ -89,6 +86,7 @@ void Setting_Up_Memory_For_Ro(float av)
   vol=Lcube/norml;
   CC=pi*pi*vol*powf(Df(av),2.); //  (2*pi^2 Volume DD^2)/2  DD-> initial growing mode 
   rho_b_inv=1.0/(norml*MM); // inverse of density in units of particles per unit cell
+  tpibyL=2.0*pi/LL;// 2 pi /LL 
   
   printf("norml=%e\tCC=%e\trho_b_inv=%e\n",norml,CC,rho_b_inv);
 }
@@ -272,19 +270,21 @@ float p(long i,long j,long k)
 /*******************************************************************************************************/
 /*******************************************************************************************************/
 /******************** TO FIND POWER SPECTRUM **************************/
-void calpow(int f_flag,int Nbin,double* power, double* powerk, double* kmode,long *no)
+
+void calpow(int f_flag, int Nbin, double* power, double* powerk, double* kmode, long *no)
 {
   long i, j, k, a, b, c;
   int d;
   fftwf_complex *comp_ro;
   float fac1,fac2,fac3, fac, m, scale;
-  long index,index1,index2;
+  long index,index1,index2,c1=0;
   
   // f-flag==0 -> ro contains delta(k)
   // f-flag==1 -> ro contains delta(x)
   
   /*************** TAKING FOURIER TRANSFORM OF RO. **************/
   // do forward  transform to get delta(k)
+  
   if(f_flag==1)
     {
       for(i=0;i<N1;i++)
@@ -303,7 +303,6 @@ void calpow(int f_flag,int Nbin,double* power, double* powerk, double* kmode,lon
   fac2=1./(1.*N2*N2);
   fac3=1./(1.*N3*N3);
   
-  /**************** BINNING POWER SPECTRA **********************/
   
   for(i=0;i<Nbin;++i)
     {
@@ -312,9 +311,76 @@ void calpow(int f_flag,int Nbin,double* power, double* powerk, double* kmode,lon
       kmode[i]=0.0;
       no[i]=0;
     }
+  
   // dor logarithmic bins
+  
   scale=log10(0.5*N1)/Nbin;
+  
   // ----------------------
+  
+  
+  /**************** BINNING POWER SPECTRA **********************/
+  
+  /*-------------------------- half lines ------------------------- */
+  
+  for(i=1;i<=N1/2;i++)
+    for(j=0;j<=N2/2;j=j+N2/2)
+      for(k=0;k<=N3/2;k=k+N3/2)
+	{
+	  a=i;
+	  b=j;
+	  c=k;
+	  
+	  index = i*N2*(N3/2+1) + j*(N3/2+1) + k;
+	  
+	  m = sqrt(fac1*a*a + fac2*b*b + fac3*c*c);	      
+	  
+	  d=(int)floorf(log10(m*N1)/scale);//logarithmic bins
+	  
+	  if(d>=0 && d<Nbin)
+	    {
+	      power[d]+= ((comp_ro[index][0]* comp_ro[index][0]) + (comp_ro[index][1]* comp_ro[index][1]))*1.;
+	      powerk[d] += Pk((float)(tpibyL*m))*1.0;
+	      kmode[d] += m*1.;
+	      no[d]=no[d]+1;
+	    }
+	}	  
+  
+  /*----------------------- half planes -----------------------*/
+  
+  for(i=0;i<N1;i++)
+    {
+      a=(i>N1/2)? N1-i: i;
+      index1 = i*N2*(N3/2+1) ;
+      
+      for(j=1;j<N2/2;j++) 
+	{
+	  b=j; 
+	  index2 = index1 + j*(N3/2+1) ;
+	  
+	  for(k=0;k<=N3/2;k=k+N3/2)
+	    {
+	      c=k;
+	      
+	      index = index2 + k;
+	      
+	      m = sqrt(fac1*a*a + fac2*b*b + fac3*c*c);	      
+	      
+	      d=(int)floorf(log10(m*N1)/scale);//logarithmic bins
+	      
+	      if(d>=0 && d<Nbin)
+		{
+		  power[d]+= ((comp_ro[index][0]* comp_ro[index][0]) + (comp_ro[index][1]* comp_ro[index][1]))*1.;
+		  powerk[d] += Pk((float)(tpibyL*m))*1.0; 
+		  kmode[d] += m*1.;
+		  no[d]=no[d]+1;
+		}
+	      
+	    }	  
+	}
+    }
+  
+  /**************** half cube **********************/
   
   for(i=0;i<N1;i++)
     {
@@ -325,8 +391,6 @@ void calpow(int f_flag,int Nbin,double* power, double* powerk, double* kmode,lon
 	{
 	  b=(j>N2/2)? N2-j: j;
 	  index2 = index1 + j*(N3/2+1) ;
-	  
-	  // upper half  - gets 2 weightage
 	  
 	  for(k=1;k<N3/2;k++)
 	    {
@@ -342,39 +406,19 @@ void calpow(int f_flag,int Nbin,double* power, double* powerk, double* kmode,lon
 	      
 	      d=(int)floorf(log10(m*N1)/scale);//logarithmic bins
 	      
-	      if ((d<Nbin))
+	      if (d>=0 && d<Nbin)
 		{
-		  power[d] += ((comp_ro[index][0]* comp_ro[index][0]) + (comp_ro[index][1]* comp_ro[index][1]))*2.;
-		  powerk[d] += Pk((float)(2.*pi*m/LL))*2.0;
-		  kmode[d] += m*2.;
-		  no[d] += 2;
-		}
-	    } /* end k for loop */
-	  
-	  // bounday of upper half gets single weightage 
-	  
-	  for(k=0;k<=N3/2;k+=N3/2)
-	    {
-	      c=k;	  	      	      
-	      index=index2 + k;
-	      
-	      m=sqrt(fac1*a*a + fac2*b*b + fac3*c*c);	      
-	      
-	      /* m*(2 * pi/LL) is |k| */
-	      /* m=1/2 corresponds to kmode[Nbin-1] i.e. Nyquits */	      	     
-	      
-	      d=(int)floorf(log10(m*N1)/scale);//logarithmic bins
-	      
-	      if (((a+b+c)!=0)&&(d<Nbin))
-		{
-		  power[d]+= ((comp_ro[index][0]* comp_ro[index][0]) + (comp_ro[index][1]* comp_ro[index][1]))*1.;
-		  powerk[d] += Pk((float)(2.*pi*m/LL))*1.0;
+		  power[d] += ((comp_ro[index][0]* comp_ro[index][0]) + (comp_ro[index][1]* comp_ro[index][1]))*1.;
+		  powerk[d] += Pk((float)(tpibyL*m))*1.0;
 		  kmode[d] += m*1.;
-		  no[d]++;
+                  no[d]=no[d]+1;
 		}
 	    } /* end k for loop */
+	  
 	}
     }
+  
+  
   
   for(i=0;i<Nbin;i++)
     {
@@ -382,7 +426,7 @@ void calpow(int f_flag,int Nbin,double* power, double* powerk, double* kmode,lon
 	{
 	  power[i] =  power[i]/(1.*no[i]*vol);
 	  powerk[i] = powerk[i]/(1.*no[i]);
-	  kmode[i]=2.*pi*kmode[i]/(1.*no[i]*LL);
+	  kmode[i]=tpibyL*kmode[i]/(1.*no[i]);
 	}
     }
   
@@ -408,6 +452,190 @@ void calpow(int f_flag,int Nbin,double* power, double* powerk, double* kmode,lon
       fftwf_execute(q_ro);
     }
 }
+
+/**********************************************************************/
+/******************** TO FIND POWER SPECTRUM **************************/
+
+void calpow_k(int f_flag, float kmin, float kmax, int Nbin,double* power, double* powerk, double* kmode, long *no)
+{
+  long i, j, k, a, b, c;
+  int d;
+  fftwf_complex *comp_ro;
+  float fac1,fac2,fac3, fac, m, scale;
+  long index,index1,index2;
+  
+  // f-flag==0 -> ro contains delta(k)
+  
+  // f-flag==1 -> ro contains delta(x)
+  
+  /*************** TAKING FOURIER TRANSFORM OF RO. **************/
+  
+  // do forward  transform to get delta(k)
+  
+  if(f_flag==1)
+    {
+      for(i=0;i<N1;i++)
+	for(j=0;j<N2;j++)
+	  for(k=0;k<N3;k++)
+	    ro[i][j][k]=ro[i][j][k]*Lcube;
+      
+      fftwf_execute(p_ro);  // ro mow contains delta(k)
+    }
+  
+  comp_ro = (fftwf_complex *)&(ro[0][0][0]);
+  
+  /*********** TO FIND POWER SPECTRUM OF RO. **************/
+  
+  fac1=1./(1.*N1*N1);
+  fac2=1./(1.*N2*N2);
+  fac3=1./(1.*N3*N3);
+  
+  
+  for(i=0;i<Nbin;++i)
+    {
+      power[i]=0.0;
+      powerk[i]=0.0;
+      kmode[i]=0.0;
+      no[i]=0;
+    }
+  
+  // dor logarithmic bins
+  
+  scale=(log10(kmax)-log10(kmin))/Nbin;
+  
+  // ----------------------
+  
+  /**************** BINNING POWER SPECTRA **********************/
+  
+  /*-------------------------- half lines ------------------------- */
+  
+  for(i=1;i<=N1/2;i++)
+    for(j=0;j<=N2/2;j=j+N2/2)
+      for(k=0;k<=N3/2;k=k+N3/2)
+	{
+	  a=i;
+	  b=j;
+	  c=k;
+	  
+	  index = i*N2*(N3/2+1) + j*(N3/2+1) + k;
+	  
+	  m = tpibyL*sqrt(fac1*a*a + fac2*b*b + fac3*c*c);  /* m is |k| */      
+	  
+	  d=(int)floorf((log10(m)-log10(kmin))/scale);  //logarithmic bins
+	  
+	  if(d>=0 && d<Nbin)
+	    {
+	      power[d]+= ((comp_ro[index][0]* comp_ro[index][0]) + (comp_ro[index][1]* comp_ro[index][1]))*1.;
+	      powerk[d] += Pk((float)(m))*1.0;
+	      kmode[d] += m*1.;
+	      no[d]=no[d]+1;
+	    }
+	}	  
+  
+  /*----------------------- half planes -----------------------*/
+  
+  for(i=0;i<N1;i++)
+    {
+      a=(i>N1/2)? N1-i: i;
+      index1 = i*N2*(N3/2+1) ;
+      
+      for(j=1;j<N2/2;j++) 
+	{
+	  b=j; 
+	  index2 = index1 + j*(N3/2+1) ;
+	  
+	  for(k=0;k<=N3/2;k=k+N3/2)
+	    {
+	      c=k;
+	      
+	      index = index2 + k;
+	      
+	      m = tpibyL*sqrt(fac1*a*a + fac2*b*b + fac3*c*c);  /* m is |k| */      
+	      
+	      d=(int)floorf((log10(m)-log10(kmin))/scale);  //logarithmic bins
+	      
+	      if(d>=0 && d<Nbin)
+		{
+		  power[d]+= ((comp_ro[index][0]* comp_ro[index][0]) + (comp_ro[index][1]* comp_ro[index][1]))*1.;
+		  powerk[d] += Pk((float)(m))*1.0;
+		  kmode[d] += m*1.;
+		  no[d]=no[d]+1;
+		}
+	      
+	    }	  
+	}
+    }
+  
+  /**************** half cube **********************/
+  
+  for(i=0;i<N1;i++)
+    {
+      a=(i>N1/2)? N1-i: i;
+      index1 = i*N2*(N3/2+1) ;
+      
+      for(j=0;j<N2;j++)
+	{
+	  b=(j>N2/2)? N2-j: j;
+	  index2 = index1 + j*(N3/2+1) ;
+	  
+	  for(k=1;k<N3/2;k++)
+	    {
+	      c=k;	  	      
+	      index = index2 + k;
+	      
+	      m = tpibyL*sqrt(fac1*a*a + fac2*b*b + fac3*c*c);  /* m is |k| */      
+	      
+	      d=(int)floorf((log10(m)-log10(kmin))/scale);  //logarithmic bins
+	      
+	      if (d>=0 && d<Nbin)
+		{
+		  power[d] += ((comp_ro[index][0]* comp_ro[index][0]) + (comp_ro[index][1]* comp_ro[index][1]))*1.;
+		  powerk[d] += Pk((float)(m))*1.0;
+		  kmode[d] += m*1.;
+                  no[d]=no[d]+1;
+		}
+	    } /* end k for loop */
+	  
+	}
+    }
+  
+  
+  
+  for(i=0;i<Nbin;i++)
+    {
+      if (no[i]>0)
+	{
+	  power[i] =  power[i]/(1.*no[i]*vol);
+	  powerk[i] = powerk[i]/(1.*no[i]);
+	  kmode[i] = kmode[i]/(1.*no[i]);
+	}
+    }
+  
+  // do back transform to get delta(x)
+  if(f_flag==1)
+    {
+      for(i=0;i<N1;i++)
+	{
+	  index1 = i*N2*(N3/2+1) ;	  
+	  for(j=0;j<N2;j++)
+	    {
+	      index2=index1 + j*(N3/2+1) ;
+	      for(k=0;k<N3/2;k++)
+		{
+		  index=index2 + k;
+		  
+		  comp_ro[index][0]=comp_ro[index][0]/vol;
+		  comp_ro[index][1]=comp_ro[index][1]/vol;
+		}
+	    }
+	}
+      /*  now convert the array back to real space */
+      fftwf_execute(q_ro);
+    }
+}
+
+
+/*******************************************************************************************************/
 
 /*******************************************************************************************************/
 
@@ -465,6 +693,7 @@ void grad_phi(int ix)
   fftwf_execute(q_va); /* Take fourier transform */
 }
 
+//############################################################################################
 //############################################################################################
 
 void Zel_move_gradphi(float av,float **rra,float **vva)
@@ -571,6 +800,69 @@ void cic(float **rra)
 } /* end of function cic */
 
 //############################################################################################
+//############################################################################################
+
+void cic_sampled(float **rra, int *s_indx)
+// //For a  given particle distribution 
+// This uses Cloud in Cell(CIC)  to calculate (1 + delta) on the  Grid 
+{  
+  long i, j, k, ix, jy, kz;
+  int ii, jj, kk; 
+  long  pin,index;
+  float wx,wy,wz;
+
+  /* Clear out the array ro. ******/
+#pragma omp parallel for private(i,j,k,index)
+  for(i=0;i<N1;i++)
+    for(j=0;j<N2;j++)
+      for(k=0;k<N3;k++)
+	{
+	  index = (i*N2+j)*N3 + k;
+	  ro[i][j][k] = 0.0;
+	  omp_init_lock(&ro_lck[index]);
+	}
+
+  /********************************/
+#pragma omp parallel for private(i, j, k, ii, jj, kk, wx, ix, wy, jy, wz, kz, index)
+  for(pin=0;pin<MM;pin++)
+   if(s_indx[pin]==-1)
+    { /* begin particle index loop */
+      /* (a/b/c)[0] or (a/b/c)[1] can never be greater than (N1/N2/N3) */
+      // left bottom corner of cell containing the particle
+      
+      i = (long)floor(rra[pin][0]);
+      j = (long)floor(rra[pin][1]);
+      k = (long)floor(rra[pin][2]);
+      
+      /* for each of the 8 corner points */
+      for(ii=0;ii<=1;ii++)
+	{
+	  wx=fabs(1.-rra[pin][0]+i-ii)*rho_b_inv; // divide by mean density    
+	  ix=(i+ii)%N1;
+	  
+	  for(jj=0;jj<=1;jj++)
+	    {
+	      wy=fabs(1.-rra[pin][1]+j-jj);
+	      jy=(j+jj)%N2;
+	      
+	      for(kk=0;kk<=1;kk++)
+		{ 
+		  wz=fabs(1.-rra[pin][2]+k-kk);       
+		  kz=(k+kk)%N3;
+
+		  index=(ix*N2+jy)*N3 + kz;
+
+		  omp_set_lock(&ro_lck[index]);
+		  ro[ix][jy][kz]+=wx*wy*wz;
+		  omp_unset_lock(&ro_lck[index]);
+		}
+	    }
+	} /* end of 8 grid corners loop>	*/
+    } /* end of each particle loop */
+
+} /* end of function cic_sampled */
+
+//##########################################################################################
 
 void Get_phi(int f_flag)  // calculates Laplacian^{-1}[ ro]]
 {
@@ -722,6 +1014,7 @@ void Update_v(float av,float delta_aa,float **rra,float **vva)  // udates v if (
 } /* end update_v_FDA */
 
 //####################################################################################
+
 void Update_x(float aa,float delta_aa,float **rra,float **vva)
 // updates x
 {
@@ -759,6 +1052,95 @@ void Update_x(float aa,float delta_aa,float **rra,float **vva)
 /*                           IO  FUNCTIONS                                 */
 /***************************************************************************/
 
+int write_multiout(char *fname,long int seed,int output_flag,float **rra,float **vva,float vaa)
+{
+  FILE *fp1; 
+  long   ii; 
+  fp1=fopen(fname,"w");   
+  int dummy, kk; 
+  // set header structure values 
+  
+  for(kk=0;kk<6;++kk) 
+    { 
+      header1.npart[kk]=0; 
+      header1.mass[kk]=0.; 
+      header1.npartTotal[kk]=0; 
+    } 
+  header1.npart[1]=(long)MM; //DM particles in this snapshot file 
+  header1.mass[1]=DM_m; //DM particle mass in units of 10^10 M_sun/h 
+  header1.npartTotal[1]=(long)MM; //Total DM particles in simulation 
+  header1.time=vaa;     //scale factor of  nbody output     
+  header1.redshift=1./vaa-1.; 
+  header1.flag_sfr=0; 
+  header1.flag_cooling=0; 
+  header1.flag_feedback=0; 
+  header1.num_files=1;  //no. of files in each snapshot 
+  header1.BoxSize=N1*LL*1000*vhh;//simulation box size in kpc/h 
+  header1.Omega0=vomegam;    //Omega_m   
+  header1.OmegaLambda=vomegalam;     //OmegaLambda     
+  header1.HubbleParam=vhh;     //HubbleParam 
+  header1.Omegab=vomegab;    //Omega_b      
+  header1.sigma_8_present=sigma_8_present;  
+  header1.Nx=N1;
+  header1.Ny=N2;
+  header1.Nz=N3; 
+  header1.LL=LL; 
+  header1.output_flag=output_flag; 
+  header1.in_flag=zel_flag; 
+  header1.seed=seed; 
+  // done setting header  
+  if(output_flag!=1) 
+    { 
+      //final paticle positions stored in kpc/h unit and velocity written in km/sec unit  
+      for (ii=0;ii<MM;++ii) 
+ 	{	   
+ 	  rra[ii][0]=rra[ii][0]*LL*1000.*vhh;//coordinates in kpc/h 
+ 	  rra[ii][1]=rra[ii][1]*LL*1000.*vhh; 
+ 	  rra[ii][2]=rra[ii][2]*LL*1000.*vhh; 
+	  
+ 	  vva[ii][0]=vva[ii][0]*LL*vhh*100./vaa ;//peculiar velocities in km/sec 
+ 	  vva[ii][1]=vva[ii][1]*LL*vhh*100./vaa; 
+ 	  vva[ii][2]=vva[ii][2]*LL*vhh*100./vaa; 
+ 	} 
+    }
+  
+  // writing header
+  
+  fwrite(&dummy,sizeof(dummy),1,fp1);     
+  fwrite(&header1,sizeof(io_header),1,fp1);     
+  fwrite(&dummy,sizeof(dummy),1,fp1); 
+  
+  // writing data  
+  fwrite(&dummy,sizeof(dummy),1,fp1); 
+  for(ii=0;ii<MM;ii++) 
+    fwrite(&rra[ii][0],sizeof(float),3,fp1); 
+  fwrite(&dummy,sizeof(dummy),1,fp1); 
+  
+  fwrite(&dummy,sizeof(dummy),1,fp1); 
+  for(ii=0;ii<MM;ii++) 
+    fwrite(&vva[ii][0],sizeof(float),3,fp1); 
+  fwrite(&dummy,sizeof(dummy),1,fp1); 
+
+  fclose(fp1);
+
+
+  if(output_flag!=1) 
+    { 
+      //paticle positions restored in grid units  
+      for (ii=0;ii<MM;++ii) 
+ 	{	   
+ 	  rra[ii][0]=rra[ii][0]/(LL*1000.*vhh);  //coordinates in kpc/h 
+ 	  rra[ii][1]=rra[ii][1]/(LL*1000.*vhh); 
+ 	  rra[ii][2]=rra[ii][2]/(LL*1000.*vhh); 
+	  
+ 	  vva[ii][0]=(vva[ii][0]*vaa)/(LL*vhh*100.);  //peculiar velocities in km/sec 
+ 	  vva[ii][1]=(vva[ii][1]*vaa)/(LL*vhh*100.);
+ 	  vva[ii][2]=(vva[ii][2]*vaa)/(LL*vhh*100.);
+ 	} 
+    }
+
+} 
+/*-------------------------------------------------------------------------------------------------------*/
 int write_output(char *fname,long int seed,int output_flag,float **rra,float **vva,float vaa)
 {
   FILE *fp1; 
@@ -825,10 +1207,88 @@ int write_output(char *fname,long int seed,int output_flag,float **rra,float **v
   for(ii=0;ii<MM;ii++) 
     fwrite(&vva[ii][0],sizeof(float),3,fp1); 
   fwrite(&dummy,sizeof(dummy),1,fp1); 
-  
+
   fclose(fp1);
 } 
 /*-------------------------------------------------------------------------------------------------------*/
+
+int write_sampled(char *fname,int *ss_indx,long fact,long int seed,int output_flag,float **rra,float **vva,float vaa)
+{
+  FILE *fp1; 
+  long   ii; 
+  fp1=fopen(fname,"w");   
+  int dummy, kk; 
+  // set header structure values 
+  
+  for(kk=0;kk<6;++kk) 
+    { 
+      header1.npart[kk]=0; 
+      header1.mass[kk]=0.; 
+      header1.npartTotal[kk]=0; 
+    } 
+  header1.npart[1]=(long)MM/fact; //DM particles in this snapshot file 
+  header1.mass[1]=DM_m*fact*1.; //DM particle mass in units of 10^10 M_sun/h 
+  header1.npartTotal[1]=(long)MM/fact; //Total DM particles in simulation 
+  header1.time=vaa;     //scale factor of  nbody output     
+  header1.redshift=1./vaa-1.; 
+  header1.flag_sfr=0; 
+  header1.flag_cooling=0; 
+  header1.flag_feedback=0; 
+  header1.num_files=1;  //no. of files in each snapshot 
+  header1.BoxSize=N1*LL*1000*vhh;//simulation box size in kpc/h 
+  header1.Omega0=vomegam;    //Omega_m   
+  header1.OmegaLambda=vomegalam;     //OmegaLambda     
+  header1.HubbleParam=vhh;     //HubbleParam 
+  header1.Omegab=vomegab;    //Omega_b      
+  header1.sigma_8_present=sigma_8_present;  
+  header1.Nx=N1;
+  header1.Ny=N2;
+  header1.Nz=N3; 
+  header1.LL=LL; 
+  header1.output_flag=output_flag; 
+  header1.in_flag=zel_flag; 
+  header1.seed=seed; 
+  // done setting header  
+  printf("MM= %ld\n",MM);
+   printf("DM = %e \n",DM_m);
+  if(output_flag!=1) 
+    { 
+      //final paticle positions stored in kpc/h unit and velocity written in km/sec unit  
+      for (ii=0;ii<MM;++ii) 
+ 	{	   
+ 	  rra[ii][0]=rra[ii][0]*LL*1000.*vhh;//coordinates in kpc/h 
+ 	  rra[ii][1]=rra[ii][1]*LL*1000.*vhh; 
+ 	  rra[ii][2]=rra[ii][2]*LL*1000.*vhh; 
+	  
+ 	  vva[ii][0]=vva[ii][0]*LL*vhh*100./vaa ;//peculiar velocities in km/sec 
+ 	  vva[ii][1]=vva[ii][1]*LL*vhh*100./vaa; 
+ 	  vva[ii][2]=vva[ii][2]*LL*vhh*100./vaa; 
+ 	} 
+    } 
+  fwrite(&dummy,sizeof(dummy),1,fp1);     
+  fwrite(&header1,sizeof(io_header),1,fp1);     
+  fwrite(&dummy,sizeof(dummy),1,fp1); 
+  
+  // header  written 
+  // writing data  
+  fwrite(&dummy,sizeof(dummy),1,fp1); 
+  for(ii=0;ii<MM;ii++)
+  {
+   if(ss_indx[ii]!=0) 
+       fwrite(&rra[ii][0],sizeof(float),3,fp1); 
+  }
+   fwrite(&dummy,sizeof(dummy),1,fp1); 
+  
+  fwrite(&dummy,sizeof(dummy),1,fp1); 
+  for(ii=0;ii<MM;ii++)
+  { 
+   if(ss_indx[ii]!=0) 
+     fwrite(&vva[ii][0],sizeof(float),3,fp1); 
+  }
+   fwrite(&dummy,sizeof(dummy),1,fp1); 
+
+  fclose(fp1);
+} 
 /*-------------------------------------------------------------------------------------------------------*/
 
 /*-------------------------------------------------------------------------------------------------------*/
@@ -867,8 +1327,6 @@ int read_output(char *fname, int read_flag,long int *seed,int *output_flag,int *
   *in_flag=header1.in_flag; //  input file generated by ? 1 => zel  else nbody
   *seed=header1.seed;
   
-  //LL=LL*1000. //if any problem faced
-
   if(read_flag!=1)
     {
       fread(&dummy,sizeof(dummy),1,fp1);
@@ -881,6 +1339,10 @@ int read_output(char *fname, int read_flag,long int *seed,int *output_flag,int *
 	      rra[ii][0]=rra[ii][0]/(LL*1000.*vhh);//coordinates in grid
 	      rra[ii][1]=rra[ii][1]/(LL*1000.*vhh);
 	      rra[ii][2]=rra[ii][2]/(LL*1000.*vhh);
+	      
+	      rra[ii][0] = rra[ii][0]-1.0*N1*(long)(floor(rra[ii][0])/(1.*N1));
+	      rra[ii][1] = rra[ii][1]-1.0*N2*(long)(floor(rra[ii][1])/(1.*N2));  // imposing periodic boundary condition
+	      rra[ii][2] = rra[ii][2]-1.0*N3*(long)(floor(rra[ii][2])/(1.*N3));
 	    }
 	}
       fread(&dummy,sizeof(dummy),1,fp1);
@@ -902,7 +1364,7 @@ int read_output(char *fname, int read_flag,long int *seed,int *output_flag,int *
   
   fclose(fp1);
 }
-
+	  
 //*************************************************************************
 //              END of   IO  FUNCTIONS
 //*************************************************************************
@@ -929,6 +1391,7 @@ void read_fof(char *fname, int read_flag,int *output_flag, long *totcluster, flo
   fread(&header1,sizeof(io_header),1,fp1);
   fread(&dummy,sizeof(dummy),1,fp1);
   
+
   
   vaa=(float)header1.time;     //scale factor of  nbody output
   *aa=vaa;
@@ -975,6 +1438,9 @@ void read_fof(char *fname, int read_flag,int *output_flag, long *totcluster, flo
 	    halo[ii][1]=halo[ii][1]/(LL*1000.*vhh);   //coordinates in grid
 	    halo[ii][2]=halo[ii][2]/(LL*1000.*vhh);
 	    halo[ii][3]=halo[ii][3]/(LL*1000.*vhh);
+	    halo[ii][1] = halo[ii][1]-1.0*N1*(long)(floor(halo[ii][1])/(1.*N1));
+	    halo[ii][2] = halo[ii][2]-1.0*N2*(long)(floor(halo[ii][2])/(1.*N2));   // imposing periodic boundary condition
+	    halo[ii][3] = halo[ii][3]-1.0*N3*(long)(floor(halo[ii][3])/(1.*N3));
 	    
 	    halo[ii][4]=halo[ii][4]/(LL*vhh*100./vaa);  //velocities
 	    halo[ii][5]=halo[ii][5]/(LL*vhh*100./vaa);

@@ -36,12 +36,12 @@ float  DM_m, // Darm matter mass of simulation particle in 10^10 M_sun h^-1 unit
 io_header    header1;
 
 // arrays for storing data
-float ***ro; // for density/potential
-fftwf_plan p_ro; // for FFT
-fftwf_plan q_ro; // for FFT
+float ***ro, ***va; // for density/potential
+fftwf_plan p_ro, p_va; // for FFT
+fftwf_plan q_ro, q_va; // for FFT
 
 float Z; //redshift of the output
-char file[100], file1[100], file2[100], num[8], num1[8], num2[8];
+char file[100],num[8];
 
 //*******************************************************************************
 //                    done global variables from Nbody_comp 
@@ -145,7 +145,10 @@ float dist (struct particle *a, struct particle *b)
     {
       N=N1*(1-i)*(2-i)/2 + N2*i*(2-i) + N3*i*(i-1)/2;
       dx[i] = fabs(a->x[i] - b->x[i]) ;
-      dx[i] = (dx[i] > (N - 1)*LL) ? (N*LL - dx[i]) : dx[i] ;
+    //dx[i] = (dx[i] > (N - 1)*LL) ? (N*LL - dx[i]) : dx[i] ;//A BUG discovered by Debanjan Sarkar
+
+    //if the distance is greater than the half-box size, we shall calculate the distance using the following condition
+      dx[i] = (dx[i] > N/2) ? (N - dx[i]) : dx[i] ;
     }
   
   return(sqrt(dx[0]*dx[0] + dx[1]*dx[1] + dx[2]*dx[2]));
@@ -205,7 +208,9 @@ void findfriends()
 	  
 	  
 	  // check if element is in first or last grid - for calculating cluster center of mass
-	  N=N1*(1-i)*(2-i)/2 + N2*i*(2-i) + N3*i*(i-1)/2;
+	  // N=N1*(1-i)*(2-i)/2 + N2*i*(2-i) + N3*i*(i-1)/2;  //## possible bug spotted by Abinash Kumar Shaw
+	  N=(N1*(1-i)*(2-i)/2 + N2*i*(2-i) + N3*i*(i-1)/2)/NF;  // Here N is redefined in mean inter-particle separation grid unit
+
 	  
 	  
 	  if(ib[i]< 1)
@@ -271,11 +276,7 @@ void write_fof(long t, float **clust)
 
   FILE *read, *fp1;
 
-  strcpy(file1,"clusters_");
-  sprintf(num1,"%3.3f",Z);
-  strcat(file1,num1);
-
-  read = fopen(file1,"r");
+  read = fopen("clusters","r");
 
   for(i=0; i<t; i++)
     fscanf(read,"%f\t%f\t%f\t%f\t%f\t%f\t%f", &clust[i][0], &clust[i][1], &clust[i][2], &clust[i][3], &clust[i][4], &clust[i][5], &clust[i][6]);
@@ -288,11 +289,11 @@ void write_fof(long t, float **clust)
   
   //-------------------------- sort done--------------------------------------
   
-  strcpy(file2,"halo_catalogue_");
-  sprintf(num2,"%3.3f",Z);
-  strcat(file2,num2);
+  strcpy(file,"halo_catalogue_");
+  sprintf(num,"%3.3f",Z);
+  strcat(file,num);
   
-  fp1 = fopen(file2,"w");
+  fp1 = fopen(file,"w");
   
   //---------------------------write header----------------------------------------
   
@@ -326,7 +327,7 @@ void write_fof(long t, float **clust)
 //                                 main
 //***********************************************************************************
 
-main()
+void main()
 {
   int l,ii,jj;
   long i, j, k, ia[3], N;
@@ -335,9 +336,10 @@ main()
   float vaa, x_v[6], dummy_xv[6]={-1.,-1.,-1.,-1.,-1.,-1.};
   int output_flag, in_flag;
   float **rra, **vva;
-  
+  float delta_aa;
   float **clust;
-  
+  int oflag,  // desired output format
+    pk_flag;
   FILE  *inp;
   int Noutput;
   float *nz;
@@ -350,20 +352,21 @@ main()
   /* Read input parameters for the simulation from the file "input.nbody_comp" */
   /*---------------------------------------------------------------------------*/
   inp=fopen("input.nbody_comp","r");
-  fscanf(inp,"%*ld%*d");
-  fscanf(inp,"%*f%*f%*f%*f");
-  fscanf(inp,"%*f%*f");
-  fscanf(inp,"%*ld%*ld%*ld%*ld%*f");
-  fscanf(inp,"%*f%*d%*d%*d");
-  fscanf(inp,"%*f");  /* time step, final scale factor*/
+  fscanf(inp,"%ld%d",&seed,&Nbin);
+  fscanf(inp,"%f%f%f%f",&vhh,&vomegam,&vomegalam,&vnn);
+  fscanf(inp,"%f%f",&vomegab,&sigma_8_present);
+  fscanf(inp,"%ld%ld%ld%d%f",&N1,&N2,&N3,&NF,&LL);
+  fscanf(inp,"%d%d",&oflag,&pk_flag);
+  fscanf(inp,"%f%f",&vaa,&delta_aa);  /* time step, final scale factor*/
   fscanf(inp,"%d",&Noutput);
   
-  nz=(float*)calloc(Noutput,sizeof(float)); // array to store Noutput
+  nz=(float*)calloc(Noutput,sizeof(float)); // array to store Noutput 
   
   for(ii=0;ii<Noutput;ii++)
     fscanf(inp,"%f",&nz[ii]);
   
   fclose(inp);
+  MM=(N1*N2*N3)/pow(NF,3);
   
   /*-----------------------------------------------------------*/
   
@@ -387,13 +390,12 @@ main()
       
       NF=(int)round(pow(1.*N1*N2*N3/MM,1./3.));  // if 1, particle in every NF^3 grid point
       
-      printf("(%3.3f)nbody output_flag=%d, NF=%d\n", nz[jj], output_flag, NF);
+      printf("(%3.1f)nbody output_flag=%d, NF=%d\n", nz[jj], output_flag, NF);
       
       /*-----stores particles position, velocity and pointer to next particle -----------*/
       
       if(jj==0)
   	data = (struct particle *) calloc (MM, sizeof(struct particle)); // memory allocation for the data
-
       
       /*----------------copy  particle position and velocity to 'data'-------------------*/
       
@@ -444,12 +446,7 @@ main()
       
       FILE  *dat1,*dat2;
       //dat1 = fopen("clust_element","w");
-
-      strcpy(file1,"clusters_");
-      sprintf(num1,"%3.3f",nz[jj]);
-      strcat(file1,num1);
-
-      dat2 = fopen(file1,"w");
+      dat2 = fopen("clusters","w");
       
       //***********************************************************************************
       
@@ -549,17 +546,17 @@ main()
       
       write_fof(totcluster, clust);   // print sorted halo catalogue
       
+      system("rm clusters");
+      
       free(clust);
       
       /*-----------------------------------------------------------*/
-      printf("(for %3.3f) Time taken = %dhr %dmin %dsec\n",nz[jj],(int)((omp_get_wtime()-t)/3600), (int)((omp_get_wtime()-t)/60)%60, (int)(omp_get_wtime()-t)%60);
+      printf("(for %3.1f) Time taken = %dhr %dmin %dsec\n",nz[jj],(int)((omp_get_wtime()-t)/3600), (int)((omp_get_wtime()-t)/60)%60, (int)(omp_get_wtime()-t)%60);
     }
   free(rra);
   free(vva);
   free(data);
   free(grid);
   
-  system("rm clusters*");
-      
   printf("done FoF. Total time taken = %dhr %dmin %dsec\n",(int)((omp_get_wtime()-T)/3600), (int)((omp_get_wtime()-T)/60)%60, (int)(omp_get_wtime()-T)%60);
 }
