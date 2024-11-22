@@ -69,7 +69,6 @@ int count, // number of elements in a cluster
 struct particle
 {
   float x[3];
-  float v[3];
   struct particle *next;
 };
 //*******************************************************************************
@@ -206,12 +205,9 @@ void findfriends()
 	{
 	  ib[i] = (long)floor((cctest->x[i])/NF);   // grid point corresponding to cctest
 	  
-	  
 	  // check if element is in first or last grid - for calculating cluster center of mass
 	  // N=N1*(1-i)*(2-i)/2 + N2*i*(2-i) + N3*i*(i-1)/2;  //## possible bug spotted by Abinash Kumar Shaw
 	  N=(N1*(1-i)*(2-i)/2 + N2*i*(2-i) + N3*i*(i-1)/2)/NF;  // Here N is redefined in mean inter-particle separation grid unit
-
-	  
 	  
 	  if(ib[i]< 1)
 	    left_flag[i] = 1;
@@ -270,7 +266,7 @@ int cmpfunc (const void* a, const void* b) // compare two variable for shorting
 
 void write_fof(long t, float **clust)
 {
-  float  tmp1[7];
+  float  tmp1[4];
   long i, j, k;
   int dummy;
 
@@ -279,7 +275,7 @@ void write_fof(long t, float **clust)
   read = fopen("clusters","r");
 
   for(i=0; i<t; i++)
-    fscanf(read,"%f\t%f\t%f\t%f\t%f\t%f\t%f", &clust[i][0], &clust[i][1], &clust[i][2], &clust[i][3], &clust[i][4], &clust[i][5], &clust[i][6]);
+    fscanf(read,"%f\t%f\t%f\t%f", &clust[i][0], &clust[i][1], &clust[i][2], &clust[i][3]);
   
   fclose(read);
   
@@ -312,7 +308,7 @@ void write_fof(long t, float **clust)
   fwrite(&dummy,sizeof(dummy),1,fp1);
   
   for(i=0; i<t; i++)
-    fwrite(&clust[i][0],sizeof(float),7,fp1);
+    fwrite(&clust[i][0],sizeof(float),4,fp1);
   
   fwrite(&dummy,sizeof(dummy),1,fp1);
   
@@ -320,11 +316,7 @@ void write_fof(long t, float **clust)
 }
 
 //***********************************************************************************
-//                       done write sorted halo catalogue
-//***********************************************************************************
-
-//************************************************************************************
-//                                 main
+//                       done write sorted halo catalo
 //***********************************************************************************
 
 void main()
@@ -333,9 +325,9 @@ void main()
   long i, j, k, ia[3], N;
   long ll, totstar, totcluster;
   long int seed;
-  float vaa, x_v[6], dummy_xv[6]={-1.,-1.,-1.,-1.,-1.,-1.};
+  float vaa;
   int output_flag, in_flag;
-  float **rra, **vva;
+  float **rra;
   float delta_aa;
   float **clust;
   int oflag,  // desired output format
@@ -344,7 +336,7 @@ void main()
   int Noutput;
   float *nz;
   
-  double clusterx[3], clusterv[3];
+  double clusterx[3];
   
   double t,T=omp_get_wtime();
   
@@ -380,13 +372,11 @@ void main()
       sprintf(num,"%3.3f",nz[jj]);
       strcat(file,num);
       
-      read_output(file,1,&seed,&output_flag,&in_flag,rra,vva,&vaa); // only read header
+      read_output(file,1,&seed,&output_flag,&in_flag,rra,&vaa); // only read header
       if(jj==0)
-  	{
-  	  rra= allocate_float_2d(MM,3);
-  	  vva= allocate_float_2d(MM,3);
-  	}
-      read_output(file,2,&seed,&output_flag,&in_flag,rra,vva,&vaa); // read data
+	rra= allocate_float_2d(MM,3);
+  	
+      read_output(file,2,&seed,&output_flag,&in_flag,rra,&vaa); // read data
       
       NF=(int)round(pow(1.*N1*N2*N3/MM,1./3.));  // if 1, particle in every NF^3 grid point
       
@@ -402,10 +392,8 @@ void main()
       for(ll=0;ll<MM;ll++)
   	{
   	  for(l=0; l<3; l++)
-  	    {
-  	      data[ll].x[l] = rra[ll][l];
-  	      data[ll].v[l] = vva[ll][l];
-  	    }
+	    data[ll].x[l] = rra[ll][l];
+	  
   	  data[ll].next= NULL;
   	}
       
@@ -445,7 +433,6 @@ void main()
       //***********************************************************************************
       
       FILE  *dat1,*dat2;
-      //dat1 = fopen("clust_element","w");
       dat2 = fopen("clusters","w");
       
       //***********************************************************************************
@@ -462,7 +449,6 @@ void main()
   		    left_flag[l] = 0;
   		    right_flag[l] = 0;
   		    clusterx[l] = 0.0;
-  		    clusterv[l] = 0.0;
   		  }
 		
   		/*******************************************/
@@ -488,51 +474,29 @@ void main()
   			    if(left_flag[l] !=0 && right_flag[l] !=0)
   			      clusterx[l] += (double)((tmp->x[l] < N/2.0) ? (tmp->x[l]+N) : tmp->x[l]);
   			    else
-  			      clusterx[l] += (double)tmp->x[l];
-			    
-  			    clusterv[l] += (double)tmp->v[l]; // calculating cluster velocity
-			    
-			    
-  			    /* if(output_flag != 1) */
-  			    /*   { */
-  			    /*     x_v[l]=tmp->x[l]*LL*1000.0*vhh;   //coordinates in kpc/h */
-  			    /*     x_v[l+3]=tmp->v[l]*LL*vhh*100./vaa;   //peculiar velocities in km/sec */
-  			    /*   } */
-  			    /* else */
-  			    /*   { */
-  			    /*     x_v[l]=tmp->x[l];   //coordinates in N-body grid unit */
-  			    /*     x_v[l+3]=tmp->v[l]; */
-  			    /*   } */
-  			  }
-  			/* fwrite(&x_v[0],sizeof(float),6,dat1);   //for cluster element printing */
-			
-  			tmp=tmp->next;
-  		      }
-  		    /* fwrite(&dummy_xv[0],sizeof(float),6,dat1);  */
-		    
+  			      clusterx[l] += (double)tmp->x[l];  		
+			  }
+
+			tmp=tmp->next;
+  		      }		    
   		    /***** for cluster position calculation *****/
   		    for(l=0;l<3;l++)
   		      {
   			N=N1*(1-l)*(2-l)/2 + N2*l*(2-l) + N3*l*(l-1)/2;
   			clusterx[l] = clusterx[l]/(1.0*count) + N;
   			clusterx[l] = clusterx[l] - N*floor(clusterx[l]/N); //Periodic boundary conditions appliying
-			
-  			clusterv[l] = clusterv[l]/(1.0*count);
-			
+				
   			if(output_flag != 1)
-  			  {
-  			    clusterx[l]=clusterx[l]*LL*1000.0*vhh;   //coordinates in kpc/h
-  			    clusterv[l]=clusterv[l]*LL*vhh*100./vaa;   //peculiar velocities in km/sec
-  			  }
+			  clusterx[l]=clusterx[l]*LL*1000.0*vhh;   //coordinates in kpc/h
   		      }
-  		    fprintf(dat2,"%e %e %e %e %e %e %e\n", count*DM_m, clusterx[0], clusterx[1], clusterx[2], clusterv[0], clusterv[1], clusterv[2]);
+  		    fprintf(dat2,"%e %e %e %e\n", count*DM_m, clusterx[0], clusterx[1], clusterx[2]);
 		    
   		    totcluster++ ;
   		  }
   		totstar = totstar + count ;
   	      }
       /* fclose(dat1); */
-      if( totstar!=MM)
+      if(totstar!=MM)
   	printf("Particle number not matching. totstar=%ld and MM=%ld\n",totstar,MM);
       
       fclose(dat2);
@@ -542,7 +506,7 @@ void main()
       /*-----------------------------------------------------------*/
       Z=nz[jj];
       
-      clust = allocate_float_2d(totcluster,7);
+      clust = allocate_float_2d(totcluster,4);
       
       write_fof(totcluster, clust);   // print sorted halo catalogue
       
@@ -554,7 +518,6 @@ void main()
       printf("(for %3.1f) Time taken = %dhr %dmin %dsec\n",nz[jj],(int)((omp_get_wtime()-t)/3600), (int)((omp_get_wtime()-t)/60)%60, (int)(omp_get_wtime()-t)%60);
     }
   free(rra);
-  free(vva);
   free(data);
   free(grid);
   

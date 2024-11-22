@@ -1292,7 +1292,7 @@ int write_sampled(char *fname,int *ss_indx,long fact,long int seed,int output_fl
 
 /*-------------------------------------------------------------------------------------------------------*/
 /*-------------------------------------------------------------------------------------------------------*/
-int read_output(char *fname, int read_flag,long int *seed,int *output_flag,int *in_flag,float **rra,float **vva,float *aa)
+int read_output(char *fname, int read_flag,long int *seed,int *output_flag,int *in_flag,float **rra,float *aa)
 {
   FILE *fp1;
   long ii;
@@ -1342,20 +1342,6 @@ int read_output(char *fname, int read_flag,long int *seed,int *output_flag,int *
 	      rra[ii][0] = rra[ii][0]-1.0*N1*(long)(floor(rra[ii][0])/(1.*N1));
 	      rra[ii][1] = rra[ii][1]-1.0*N2*(long)(floor(rra[ii][1])/(1.*N2));  // imposing periodic boundary condition
 	      rra[ii][2] = rra[ii][2]-1.0*N3*(long)(floor(rra[ii][2])/(1.*N3));
-	    }
-	}
-      fread(&dummy,sizeof(dummy),1,fp1);
-      
-      fread(&dummy,sizeof(dummy),1,fp1);
-      for(ii=0;ii<MM;ii++)
-	{
-	  fread(&vva[ii][0],sizeof(float),3,fp1);
-	  
-	  if (*output_flag!=1)
-	    {
-	      vva[ii][0]=vva[ii][0]/(LL*vhh*100./vaa);//velocities in 
-	      vva[ii][1]=vva[ii][1]/(LL*vhh*100./vaa);
-	      vva[ii][2]=vva[ii][2]/(LL*vhh*100./vaa);
 	    }
 	}
       fread(&dummy,sizeof(dummy),1,fp1);

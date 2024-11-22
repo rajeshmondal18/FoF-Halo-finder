@@ -11,7 +11,7 @@ void calpow(int f_flag,int Nbin,double* power, double* powerk, double* kmode,lon
 void Zel_move_gradphi(float av,float **rra,float **vva);     
 void grad_phi(int ix);
 int write_output(char *fname,long int seed,int output_flag,float **rra,float **vva,float vaa);
-int read_output(char *fname, int read_flag,long int *seed,int *output_flag,int *in_flag,float **rra,float **vva,float *aa);
+int read_output(char *fname, int read_flag,long int *seed,int *output_flag,int *in_flag,float **rra,float *aa);
 
 //Functions required to generate the power spectrum by Hu and Eisentine
 void TFset_parameters(float omega0hh, float f_baryon, float Tcmb); 
